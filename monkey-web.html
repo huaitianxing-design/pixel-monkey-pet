@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>像素猴子 · 网页版</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;user-select:none;}
+  html,body{width:100%;height:100%;overflow:hidden;font-family:"Courier New",monospace;
+    background:linear-gradient(180deg,#bfe4ff 0%,#dff1ff 45%,#f6e7c8 100%);}
+  body{display:flex;align-items:center;justify-content:center;}
+  #wrap{position:relative;width:340px;height:420px;
+    background:linear-gradient(180deg,#eaf6ff 0%,#fdf3e0 100%);
+    border:3px solid #2a1c10;border-radius:16px;
+    box-shadow:0 10px 30px rgba(0,0,0,.25);overflow:hidden;}
+  /* 地面 */
+  #wrap:after{content:"";position:absolute;left:0;right:0;bottom:0;height:62px;
+    background:#c8e6a0;border-top:3px solid #2a1c10;}
+  #stage{position:absolute;left:50%;bottom:70px;transform:translateX(-50%);cursor:pointer;transition:transform .15s;}
+  #stage:active{transform:translateX(-50%) scale(.94);}
+  canvas#monkey{display:block;image-rendering:pixelated;filter:drop-shadow(2px 3px 2px rgba(0,0,0,.3));}
+  #shadow{position:absolute;left:50%;bottom:64px;transform:translateX(-50%);
+    background:rgba(0,0,0,.22);border-radius:50%;filter:blur(2px);transition:all .3s;}
+  #bubble{position:absolute;top:8px;left:50%;transform:translateX(-50%);
+    background:#fff;border:2px solid #2a1c10;border-radius:9px;padding:4px 8px;
+    font-size:12px;color:#3a2a1a;white-space:nowrap;opacity:0;transition:opacity .3s;max-width:180px;}
+  #bubble.show{opacity:1;}
+  /* 顶部悬停工具条 */
+  #tools{position:absolute;top:6px;right:8px;display:flex;gap:4px;opacity:1;z-index:5;}
+  
+  #tools button{font-family:inherit;font-size:12px;width:24px;height:24px;border:2px solid #2a1c10;
+    border-radius:6px;cursor:pointer;background:#f4e9d8;color:#2a1c10;padding:0;line-height:1;}
+  #panel{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);display:flex;gap:8px;
+    opacity:1;z-index:5;}
+  
+  #panel button{font-family:inherit;font-size:15px;width:34px;height:34px;border:2px solid #2a1c10;
+    border-radius:8px;cursor:pointer;background:#ff8c42;color:#fff;padding:0;}
+  #panel button.g{background:#5fbf5f;}#panel button.b{background:#4a90d9;}#panel button.p{background:#9b59b6;}
+  #err{position:absolute;top:0;left:0;right:0;font-size:10px;color:#900;background:#fff8;padding:2px;display:none;z-index:99;}
+  #float{position:absolute;left:50%;bottom:170px;font-size:12px;font-weight:bold;opacity:0;}
+  @keyframes fu{0%{opacity:1;transform:translate(-50%,0)}100%{opacity:0;transform:translate(-50%,-30px)}}
+  .fx{animation:fu .9s ease-out forwards;}
+  /* 迷你收起态：一个小球 */
+  #mini{position:absolute;top:0;left:0;width:100%;height:100%;display:none;
+    align-items:center;justify-content:center;cursor:pointer;}
+  #mini canvas{image-rendering:pixelated;width:84px;height:84px;filter:drop-shadow(1px 2px 2px rgba(0,0,0,.4));}
+  body.collapsed #stage,body.collapsed #panel,body.collapsed #tools,body.collapsed #shadow,body.collapsed #bubble{display:none;}
+  body.collapsed #mini{display:flex;}
+  #stagetag{position:absolute;bottom:48px;left:50%;transform:translateX(-50%);font-size:10px;
+    color:#2a1c10;background:#f4e9d8cc;border:1px solid #2a1c10;border-radius:5px;padding:1px 6px;
+    opacity:1;white-space:nowrap;z-index:5;}
+  
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="err"></div>
+  <div id="tools">
+    <button id="btn-collapse" title="缩小收起">➖</button>
+  </div>
+  <div id="bubble"></div>
+  <div id="shadow"></div>
+  <div id="stage"><canvas id="monkey" width="64" height="64"></canvas></div>
+  <div id="stagetag"></div>
+  <div id="float"></div>
+  <div id="panel">
+    <button onclick="Game.feed()">🍌</button>
+    <button class="g" onclick="Game.play()">🎮</button>
+    <button class="b" onclick="Game.sleep()">💤</button>
+    <button class="p" onclick="Game.wash()">🧼</button>
+  </div>
+  <div id="mini"><canvas id="minicv" width="56" height="56"></canvas></div>
+</div>
+<script>
+function showErr(m){var e=document.getElementById('err');e.style.display='block';e.textContent=String(m);}
+window.onerror=function(msg,src,line,col,e){showErr('ERR '+line+':'+col+' '+msg);};
+try{
+const C=document.getElementById('monkey'),X=C.getContext('2d');
+const MC=document.getElementById('minicv'),MX=MC.getContext('2d');
+X.imageSmoothingEnabled=false;MX.imageSmoothingEnabled=false;
+const P={fur:'#8a5a2b',furD:'#6b4420',face:'#e0b98a',faceD:'#c99b6a',
+  eye:'#2a1c10',mouth:'#5a3a1a',white:'#fff',nose:'#3a2a1a',blush:'#e88',banana:'#e8c34a',ear:'#e0b98a',
+  crown:'#f5c542',crownD:'#c99a1e'};
+
+// 画猴子到指定 context；crown=是否戴皇冠(猴王)
+function drawMonkey(ctx,state,frame,crown){
+  ctx.clearRect(0,0,64,64);
+  var oy=0;
+
+  // ===== 睡觉：躺下 + 呼吸起伏 + 飘 Z =====
+  if(state==='sleep'){
+    var br=(Math.floor(frame/3)%2); // 呼吸
+    // 地上躺着的身体（横躺）
+    ctx.fillStyle=P.fur;ctx.fillRect(16,44-br,30,12);
+    ctx.fillStyle=P.furD;ctx.fillRect(16,54,30,3);
+    ctx.fillStyle=P.face;ctx.fillRect(20,47-br,10,7);
+    // 头（枕在左边）
+    ctx.fillStyle=P.fur;ctx.fillRect(10,40-br,16,16);
+    ctx.fillStyle=P.ear;ctx.fillRect(9,44-br,3,4);
+    ctx.fillStyle=P.face;ctx.fillRect(13,44-br,10,9);
+    // 闭眼
+    ctx.fillStyle=P.eye;ctx.fillRect(15,48-br,4,1);
+    // 微笑睡
+    ctx.fillStyle=P.mouth;ctx.fillRect(15,51-br,4,1);
+    // 皇冠放旁边
+    if(crown){ctx.fillStyle=P.crown;ctx.fillRect(10,36-br,14,3);ctx.fillRect(11,33-br,2,3);ctx.fillRect(16,33-br,2,3);ctx.fillRect(21,33-br,2,3);}
+    // 飘 Z
+    ctx.fillStyle=P.eye;ctx.font='7px monospace';
+    var zf=frame%9;
+    ctx.fillText('z',40,34-zf);ctx.fillText('Z',46,30-zf*1.2);ctx.font='9px monospace';ctx.fillText('Z',50,24-zf*1.5);
+    return;
+  }
+
+  // ===== 洗澡：木盆 + 泡泡 + 搓澡 + 水花 =====
+  if(state==='wash'){
+    var sc=frame%2; // 搓动
+    // 木盆
+    ctx.fillStyle='#9c6b3a';ctx.fillRect(12,44,40,14);
+    ctx.fillStyle='#7a5230';ctx.fillRect(12,44,40,3);ctx.fillRect(12,55,40,3);
+    // 盆里的水
+    ctx.fillStyle='#8fd0e8';ctx.fillRect(14,47,36,7);
+    // 猴子上半身泡在盆里
+    ctx.fillStyle=P.fur;ctx.fillRect(24,24,16,24);
+    ctx.fillStyle=P.face;ctx.fillRect(27,30,10,10);
+    // 头
+    ctx.fillStyle=P.fur;ctx.fillRect(22,12,20,16);
+    ctx.fillStyle=P.ear;ctx.fillRect(21,16,3,4);ctx.fillRect(42,16,3,4);
+    ctx.fillStyle=P.face;ctx.fillRect(26,16,12,10);
+    // 眯眼笑
+    ctx.fillStyle=P.eye;ctx.fillRect(28,19,3,1);ctx.fillRect(34,19,3,1);
+    ctx.fillStyle=P.mouth;ctx.fillRect(29,23,6,1);ctx.fillRect(30,24,4,1);
+    if(crown){ctx.fillStyle=P.crown;ctx.fillRect(23,8,18,3);}
+    // 搓澡的手（左右来回）
+    ctx.fillStyle=P.furD;ctx.fillRect(18+sc*2,32,5,4);ctx.fillRect(40-sc*2,32,5,4);
+    // 泡泡
+    ctx.fillStyle='#ffffff';
+    var b=frame%6;
+    ctx.fillRect(16,40-b,3,3);ctx.fillRect(44,38-b,3,3);ctx.fillRect(30,10-b,2,2);
+    ctx.fillRect(20,22-(b%4),2,2);ctx.fillRect(40,20-(b%4),2,2);
+    ctx.strokeStyle='#cfeefc';
+    // 水花
+    ctx.fillStyle='#8fd0e8';ctx.fillRect(10+sc,46,2,2);ctx.fillRect(52-sc,48,2,2);
+    return;
+  }
+
+  // ===== 玩耍：奔跑 + 跳跃（连续帧）=====
+  if(state==='play'){
+    var run=frame%4;                 // 跑步循环
+    var jy=-Math.abs((frame%8)-4)*3; // 跳跃弧线
+    oy=jy;
+    // 尾巴甩
+    ctx.fillStyle=P.furD;ctx.fillRect(9,40+oy,4,4);ctx.fillRect(6,38+oy+run,4,6);
+    // 身体
+    ctx.fillStyle=P.fur;ctx.fillRect(22,34+oy,20,18);
+    ctx.fillStyle=P.face;ctx.fillRect(27,38+oy,10,10);
+    // 摆动手臂
+    ctx.fillStyle=P.fur;
+    ctx.fillRect(14,30+oy+(run<2?0:6),6,8);
+    ctx.fillRect(44,30+oy+(run<2?6:0),6,8);
+    // 奔跑的腿（交替）
+    ctx.fillStyle=P.furD;
+    if(run<2){ctx.fillRect(24,50+oy,6,8);ctx.fillRect(34,52+oy,6,5);}
+    else{ctx.fillRect(24,52+oy,6,5);ctx.fillRect(34,50+oy,6,8);}
+    // 头
+    ctx.fillStyle=P.fur;ctx.fillRect(20,12+oy,24,22);
+    ctx.fillRect(15,16+oy,6,8);ctx.fillRect(43,16+oy,6,8);
+    ctx.fillStyle=P.ear;ctx.fillRect(16,18+oy,3,4);ctx.fillRect(45,18+oy,3,4);
+    ctx.fillStyle=P.face;ctx.fillRect(24,17+oy,16,15);
+    if(crown){ctx.fillStyle=P.crown;ctx.fillRect(22,8+oy,20,5);ctx.fillRect(23,4+oy,3,4);ctx.fillRect(30,3+oy,3,4);ctx.fillRect(38,4+oy,3,4);}
+    // 兴奋大眼
+    ctx.fillStyle=P.white;ctx.fillRect(27,22+oy,4,4);ctx.fillRect(33,22+oy,4,4);
+    ctx.fillStyle=P.eye;ctx.fillRect(28,23+oy,2,2);ctx.fillRect(34,23+oy,2,2);
+    // 张嘴笑
+    ctx.fillStyle=P.mouth;ctx.fillRect(28,29+oy,8,1);ctx.fillRect(29,30+oy,6,1);
+    ctx.fillStyle=P.blush;ctx.fillRect(25,26+oy,2,2);ctx.fillRect(37,26+oy,2,2);
+    // 速度线
+    ctx.fillStyle='#ffffff';ctx.fillRect(4,30+oy,4,1);ctx.fillRect(3,36+oy,5,1);ctx.fillRect(52,30+oy,4,1);
+    return;
+  }
+
+  // ===== 吃饭：反复送香蕉入口 + 咀嚼 =====
+  if(state==='eat'){
+    var chew=frame%2;                 // 咀嚼
+    var lift=(frame%4<2)?0:4;         // 香蕉抬起/放下
+    oy=chew;
+    ctx.fillStyle=P.furD;ctx.fillRect(10,38+oy,4,4);ctx.fillRect(7,40+oy,4,4);ctx.fillRect(6,44+oy,4,6);
+    ctx.fillStyle=P.fur;ctx.fillRect(22,34+oy,20,20);
+    ctx.fillStyle=P.furD;ctx.fillRect(22,50+oy,20,4);
+    ctx.fillStyle=P.face;ctx.fillRect(27,38+oy,10,12);
+    // 左手扶 + 右手举香蕉到嘴
+    ctx.fillStyle=P.fur;ctx.fillRect(16,42+oy,6,8);
+    ctx.fillRect(38,26+lift+oy,6,8);
+    ctx.fillStyle=P.furD;ctx.fillRect(25,52+oy,6,6);ctx.fillRect(33,52+oy,6,6);
+    // 头
+    ctx.fillStyle=P.fur;ctx.fillRect(20,10+oy,24,22);
+    ctx.fillRect(15,14+oy,6,8);ctx.fillRect(43,14+oy,6,8);
+    ctx.fillStyle=P.ear;ctx.fillRect(16,16+oy,3,4);ctx.fillRect(45,16+oy,3,4);
+    ctx.fillStyle=P.face;ctx.fillRect(24,15+oy,16,15);
+    if(crown){ctx.fillStyle=P.crown;ctx.fillRect(22,6+oy,20,5);ctx.fillRect(23,2+oy,3,4);ctx.fillRect(30,1+oy,3,4);ctx.fillRect(38,2+oy,3,4);}
+    // 眼
+    ctx.fillStyle=P.white;ctx.fillRect(27,20+oy,4,4);ctx.fillRect(33,20+oy,4,4);
+    ctx.fillStyle=P.eye;ctx.fillRect(28,21+oy,2,2);ctx.fillRect(34,21+oy,2,2);
+    // 咀嚼的嘴（开合）+ 鼓腮
+    ctx.fillStyle=P.mouth;
+    if(chew){ctx.fillRect(29,26+oy,6,3);}else{ctx.fillRect(29,27+oy,6,1);}
+    ctx.fillStyle=P.faceD;ctx.fillRect(24,24+oy,2,3);ctx.fillRect(38,24+oy,2,3); // 鼓腮
+    // 香蕉（在嘴前，随手起落）
+    ctx.fillStyle=P.banana;ctx.fillRect(37,24+lift+oy,4,7);ctx.fillStyle='#c99a1e';ctx.fillRect(37,24+lift+oy,4,1);
+    return;
+  }
+
+  // ===== 其它状态（idle / happy / sad / 点击小动作）=====
+  // 待机微动作：高频切换，幅度加大，几乎一直在动
+  var idlePhase=Math.floor(frame/20)%6; // 每 20 帧(≈2秒)换一个动作
+  var lookX=0, scratch=false, tailSwing=0, hop=0;
+  if(state==='idle'){
+    tailSwing=(Math.floor(frame/3)%2===0)?1:-1; // 尾巴始终摆
+    if(idlePhase===0)lookX=-2;        // 看左（幅度加大）
+    else if(idlePhase===1)lookX=2;    // 看右
+    else if(idlePhase===2)scratch=(Math.floor(frame/3)%2===0); // 挠头
+    else if(idlePhase===3)tailSwing=(Math.floor(frame/2)%2===0)?3:-3; // 大幅甩尾
+    else if(idlePhase===4)hop=(Math.floor(frame/2)%2===0)?-6:0; // 原地明显小跳
+    else if(idlePhase===5)lookX=(Math.floor(frame/3)%2===0)?-2:2; // 左右张望
+  }
+  const blink=(state==='wave'&&frame%6<1)||(state==='idle'&&frame%30>=27);
+  oy=(state==='idle')?((Math.floor(frame/4)%2===0?0:2)+hop):(state==='jump'?-Math.abs((frame%6)-3)*2:0);
+  // 尾巴（待机会甩）
+  ctx.fillStyle=P.furD;ctx.fillRect(10,38+oy,4,4);ctx.fillRect(7,40+oy+tailSwing,4,4);ctx.fillRect(6,44+oy+tailSwing*2,4,6);
+  ctx.fillStyle=P.fur;ctx.fillRect(22,34+oy,20,20);
+  ctx.fillStyle=P.furD;ctx.fillRect(22,50+oy,20,4);
+  ctx.fillStyle=P.face;ctx.fillRect(27,38+oy,10,12);
+  ctx.fillStyle=P.fur;
+  var armSw=(Math.floor(frame/3)%2===0)?0:5; // 待机手臂大幅摆动
+  if(state==='jump'){ctx.fillRect(14,28+oy,6,8);ctx.fillRect(44,28+oy,6,8);}
+  else if(state==='wave'){ctx.fillRect(16,40+oy,6,10);ctx.fillRect(44,24+oy-(frame%2)*2,6,10);}
+  else if(state==='dance'){var d=(frame%2)*4;ctx.fillRect(14+d,30+oy,6,8);ctx.fillRect(44-d,30+oy,6,8);}
+  else if(scratch){ctx.fillRect(16,40+oy,6,10);ctx.fillRect(40,16+oy,6,12);} // 一只手抬高挠头
+  else{ctx.fillRect(16,40+oy-armSw,6,10+armSw);ctx.fillRect(42,40+oy-(5-armSw),6,10+(5-armSw));} // 双臂交替摆
+  ctx.fillStyle=P.furD;ctx.fillRect(25,52+oy,6,6);ctx.fillRect(33,52+oy,6,6);
+  ctx.fillStyle=P.fur;ctx.fillRect(20,10+oy,24,22);
+  ctx.fillRect(15,14+oy,6,8);ctx.fillRect(43,14+oy,6,8);
+  ctx.fillStyle=P.ear;ctx.fillRect(16,16+oy,3,4);ctx.fillRect(45,16+oy,3,4);
+  ctx.fillStyle=P.face;ctx.fillRect(24,15+oy,16,15);
+  ctx.fillStyle=P.faceD;ctx.fillRect(24,27+oy,16,3);
+  if(crown){ctx.fillStyle=P.crown;ctx.fillRect(22,6+oy,20,5);ctx.fillRect(23,2+oy,3,4);ctx.fillRect(30,1+oy,3,4);ctx.fillRect(38,2+oy,3,4);ctx.fillStyle=P.crownD;ctx.fillRect(22,10+oy,20,1);}
+  if(blink){ctx.fillStyle=P.eye;ctx.fillRect(27,22+oy,4,1);ctx.fillRect(33,22+oy,4,1);}
+  else{ctx.fillStyle=P.white;ctx.fillRect(27,20+oy,4,4);ctx.fillRect(33,20+oy,4,4);
+    ctx.fillStyle=P.eye;var l=(state==='dance')?1:lookX;ctx.fillRect(28+l,21+oy,2,2);ctx.fillRect(34+l,21+oy,2,2);}
+  ctx.fillStyle=P.nose;ctx.fillRect(30,25+oy,1,1);ctx.fillRect(33,25+oy,1,1);
+  // 挠头时抓耳的小手在头侧
+  if(scratch){ctx.fillStyle=P.fur;ctx.fillRect(41,14+oy,4,4);}
+  ctx.fillStyle=P.mouth;
+  if(state==='happy'||state==='jump'||state==='dance'||state==='wave'){ctx.fillRect(28,27+oy,8,1);ctx.fillRect(29,28+oy,6,1);}
+  else if(state==='sad'){ctx.fillRect(29,28+oy,6,1);ctx.fillRect(28,29+oy,1,1);ctx.fillRect(35,29+oy,1,1);}
+  else if(state==='nod'){ctx.fillRect(29,27+oy+(frame%2),6,1);}
+  else ctx.fillRect(29,27+oy,6,1);
+  if(state==='happy'||state==='dance'){ctx.fillStyle=P.blush;ctx.fillRect(25,24+oy,2,2);ctx.fillRect(37,24+oy,2,2);}
+}
+
+// 猴子抱着椰子树（收起态小图标）56x56
+function drawCoconutTree(ctx,frame){
+  ctx.clearRect(0,0,56,56);
+  var sway=(frame%4<2)?0:1;
+  ctx.fillStyle='#7a5230';ctx.fillRect(26,22,8,32);
+  ctx.fillStyle='#8f6238';ctx.fillRect(32,22,2,32);
+  ctx.fillStyle='#5e3e22';ctx.fillRect(26,22,2,32);
+  ctx.fillStyle='#5e3e22';ctx.fillRect(26,30,8,1);ctx.fillRect(26,40,8,1);ctx.fillRect(26,49,8,1);
+  ctx.fillStyle='#3d9140';
+  ctx.fillRect(6+sway,12,16,4);ctx.fillRect(4+sway,15,10,3);
+  ctx.fillRect(34-sway,12,16,4);ctx.fillRect(42-sway,15,10,3);
+  ctx.fillRect(14+sway,6,12,4);
+  ctx.fillRect(30-sway,6,12,4);
+  ctx.fillRect(22,2,12,5);
+  ctx.fillStyle='#2f7a34';
+  ctx.fillRect(12+sway,15,14,3);ctx.fillRect(30-sway,15,14,3);
+  ctx.fillRect(24,8,8,4);ctx.fillRect(18,11,20,3);
+  ctx.fillStyle='#6b4420';
+  ctx.fillRect(20,17,5,5);ctx.fillRect(31,17,5,5);ctx.fillRect(26,19,5,5);
+  ctx.fillStyle='#4a2e15';
+  ctx.fillRect(20,17,2,2);ctx.fillRect(31,17,2,2);ctx.fillRect(26,19,2,2);
+  var my=32;
+  ctx.fillStyle=P.fur;ctx.fillRect(33,my,12,11);
+  ctx.fillStyle=P.ear;ctx.fillRect(32,my+2,2,4);ctx.fillRect(44,my+2,2,4);
+  ctx.fillStyle=P.face;ctx.fillRect(35,my+3,8,7);
+  ctx.fillStyle=P.eye;ctx.fillRect(36,my+4,2,2);ctx.fillRect(40,my+4,2,2);
+  ctx.fillStyle=P.mouth;ctx.fillRect(37,my+7,4,1);
+  ctx.fillStyle=P.fur;ctx.fillRect(34,my+11,10,9);
+  ctx.fillStyle=P.furD;ctx.fillRect(30,my+10,5,3);ctx.fillRect(30,my+16,5,3);
+  ctx.fillStyle=P.furD;ctx.fillRect(43,my+16,3,3);ctx.fillRect(45,my+12,2,5);
+}
+
+const Game=(function(){
+  var KEY='pixel_monkey_web_v1';
+  const SAY={idle:['吱吱~','今天也在发呆','有香蕉吗？','挠挠头','嗯…','看看你'],
+    hungryLow:['肚子好饿…🍌','给我香蕉！','饿到没力气了'],happy:['嘿嘿好开心！','你最好了~','蹦蹦跳跳🐵'],
+    moodLow:['无聊…','陪我玩嘛','哼~'],tired:['困了…💤','眼皮好重'],dirty:['身上痒痒','想洗澡了🧼'],
+    eat:['真香！🍌','再来一根！'],play:['耶！好玩！','哈哈哈'],sleep:['Zzz…','梦到香蕉山'],wash:['舒服~','干净啦✨'],
+    poke:['干嘛戳我~','嘿嘿痒','你好呀！','看我表演！','再戳一下试试','吱呀！']};
+  // 点击猴子随机触发的动作
+  const TRICKS=['wave','jump','dance','nod'];
+  function def(){return{hunger:70,mood:70,energy:80,clean:80,born:Date.now(),last:Date.now(),growth:0};}
+  let s=load();let cur='idle',timer=0,frame=0;
+  function load(){try{var d=JSON.parse(localStorage.getItem(KEY));if(d&&d.born){
+    if(typeof d.growth!=='number')d.growth=0; // 老存档迁移：从 0 开始累积成长值
+    return d;}}catch(e){}return def();}
+  function save(){s.last=Date.now();try{localStorage.setItem(KEY,JSON.stringify(s));}catch(e){}}
+  function clamp(v){return Math.max(0,Math.min(100,v));}
+
+  // ===== 照顾质量 → 成长速度 =====
+  // 心情权重最高：不喂、不哄开心，就长得很慢
+  function careScore(){return s.mood*0.4+s.hunger*0.3+s.clean*0.15+s.energy*0.15;}
+  function growthRate(){var c=careScore();
+    // 连续曲线：照顾得越好长得越快，低于 25 分几乎停止生长
+    if(c<=25)return 0.01;
+    var t=(c-25)/60;               // 25分→0, 85分→1
+    if(t>1)t=1;
+    return 0.05+Math.pow(t,1.6)*1.35;  // 约 0.05 → 1.4
+  }
+  // 每分钟自然衰减（慢节奏：每天照顾 1～2 次即可维持良好状态）
+  var DECAY={hunger:0.022,mood:0.018,energy:0.014,clean:0.012};
+  function catchUp(){var now=Date.now();var dt=(now-s.last)/1000;if(dt<0)dt=0;var m=dt/60;
+    var left=m; // 离线期间分段模拟：边衰减边按当时状态累积成长
+    while(left>0){var step=Math.min(left,10);
+      s.growth+=step*growthRate();
+      s.hunger=clamp(s.hunger-step*DECAY.hunger);
+      s.mood=clamp(s.mood-step*DECAY.mood);
+      s.energy=clamp(s.energy-step*DECAY.energy);
+      s.clean=clamp(s.clean-step*DECAY.clean);
+      left-=step;}
+    s.last=now;}
+  function set(st,ms){cur=st;timer=ms||1600;}
+  function pick(a){return a[Math.floor(Math.random()*a.length)];}
+  function say(t){var b=document.getElementById('bubble');b.textContent=t;b.classList.add('show');
+    clearTimeout(b._t);b._t=setTimeout(function(){b.classList.remove('show');},2000);}
+  function fx(t,c){var el=document.getElementById('float');el.textContent=t;el.style.color=c;
+    el.classList.remove('fx');void el.offsetWidth;el.classList.add('fx');}
+
+  // ===== 成长（看照顾质量）=====
+  // 阶段看累积成长值 growth（单位：分钟），成长值只在照顾得好时快速累积
+  // 下面天数是“一直养得不错”的参考值；放养会慢很多
+  const STAGES=[
+    {name:'幼猴',  scale:0.55, minM:0,    crown:false},
+    {name:'少年猴',scale:0.75, minM:5600, crown:false},  // 正常养约 5 天
+    {name:'成年猴',scale:1.0,  minM:16000,crown:false},  // 正常养约 12 天
+    {name:'猴王',  scale:1.25, minM:37000,crown:true}     // 正常养约 25 天
+  ];
+  function aliveMin(){return s.growth||0;}
+  function stage(){var m=aliveMin();var st=STAGES[0];for(var i=0;i<STAGES.length;i++){if(m>=STAGES[i].minM)st=STAGES[i];}return st;}
+  function applyScale(){
+    var st=stage();var base=64;var size=Math.round(base*2*st.scale); // 2x 基准
+    C.style.width=size+'px';C.style.height=size+'px';
+    var sh=document.getElementById('shadow');
+    sh.style.width=Math.round(size*0.7)+'px';sh.style.height=Math.round(size*0.13)+'px';
+    var r=growthRate();var mark=r>=1.5?'↑快':(r>=1?'':(r>=0.5?'↓慢':'↓↓停滞'));
+    document.getElementById('stagetag').textContent=st.name+' · '+(aliveMin()/1440).toFixed(1)+'天'+(mark?' '+mark:'');
+  }
+
+  // ===== 主动天气播报 =====
+  var weatherCache=null, weatherAt=0;
+  // WMO 天气代码 -> 描述 + emoji + 建议
+  function weatherText(code,temp,feels){
+    var t=Math.round(temp);var f=Math.round(feels);
+    var desc='',tip='',emo='';
+    if(code===0){desc='晴天';emo='☀️';tip='阳光不错，出门玩吧！';}
+    else if(code<=2){desc='多云';emo='⛅';tip='云朗风轻~';}
+    else if(code===3){desc='阴天';emo='☁️';tip='天灰灰的，注意心情喔~';}
+    else if(code<=48){desc='有雾';emo='🌫️';tip='雾大，出门小心~';}
+    else if(code<=57){desc='毛毛雨';emo='🌦️';tip='有点小雨，带把伞吧！';}
+    else if(code<=67){desc='下雨';emo='🌧️';tip='下雨啦，记得带伞！';}
+    else if(code<=77){desc='下雪';emo='❄️';tip='下雪了，多穿点！';}
+    else if(code<=82){desc='阵雨';emo='🌦️';tip='有阵雨，带伞防身~';}
+    else if(code<=99){desc='雷阵雨';emo='⛈️';tip='有雷，少出门喔！';}
+    else{desc='';emo='🌤️';tip='';}
+    var cold = t<=10?'好冷，多穿点！':'';
+    var hot  = t>=32?'好热，多喝水！':'';
+    return emo+' 上海'+desc+' '+t+'°，'+(cold||hot||tip);
+  }
+  function fetchWeather(){
+    // 浏览器直连 open-meteo（支持 CORS，无需 key）
+    var url='https://api.open-meteo.com/v1/forecast?latitude=31.2304&longitude=121.4737'
+      +'&current=temperature_2m,apparent_temperature,weather_code&timezone=Asia%2FShanghai';
+    return fetch(url).then(function(r){return r.json();}).then(function(j){
+      var c=j&&j.current;if(!c)return{ok:false};
+      return{ok:true,temp:c.temperature_2m,feels:c.apparent_temperature,code:c.weather_code};
+    }).catch(function(){return{ok:false};});
+  }
+  function broadcastWeather(force){
+    fetchWeather().then(function(w){
+      if(w&&w.ok){weatherCache=w;weatherAt=Date.now();
+        say(weatherText(w.code,w.temp,w.feels));
+      }else if(force){say('天气拿不到，网络好像不好🙅');}
+    }).catch(function(){if(force)say('天气查询失败了~');});
+  }
+
+  function feed(){if(s.hunger>=98){say('吃不下啦😵');return;}
+s.hunger=clamp(s.hunger+22);s.clean=clamp(s.clean-4);set('eat',3000);say(pick(SAY.eat));fx('+饱腹','#3a7a1a');save();}
+  function play(){if(s.energy<12){say('太累了💤');set('sad',1600);return;}s.mood=clamp(s.mood+20);s.energy=clamp(s.energy-14);s.hunger=clamp(s.hunger-6);set('play',3200);say(pick(SAY.play));fx('+心情','#7a5a1a');save();}
+  function sleep(){s.energy=clamp(s.energy+30);s.mood=clamp(s.mood+4);set('sleep',3600);say(pick(SAY.sleep));fx('+精力','#1a4a7a');save();}
+  function wash(){if(s.clean>=98){say('很干净啦✨');return;}s.clean=clamp(s.clean+34);s.mood=clamp(s.mood+6);set('wash',3200);say(pick(SAY.wash));fx('+清洁','#5a1a7a');save();}
+  // 点击猴子：随机小动作
+  function poke(){var t=pick(TRICKS);set(t,1400);say(pick(SAY.poke));s.mood=clamp(s.mood+3);save();}
+
+  function autoTalk(){if(cur!=='idle')return;
+    if(s.hunger<40)return say(pick(SAY.hungryLow));if(s.energy<35)return say(pick(SAY.tired));
+    if(s.clean<40)return say(pick(SAY.dirty));if(s.mood<40)return say(pick(SAY.moodLow));
+    if(growthRate()<0.5)return say('没人理我，我都不长个了...');
+    if(s.mood>80&&s.hunger>60)return say(pick(SAY.happy));say(pick(SAY.idle));}
+  function face(){if(cur!=='idle')return cur;
+    if(s.hunger<20||s.energy<15||s.clean<18||s.mood<20)return'sad';if(s.mood>82)return'happy';return'idle';}
+  function tick(){frame++;if(timer>0){timer-=100;if(timer<=0)cur='idle';}
+    if(frame%50===0){ // 每 5 秒：按当前照顾状态累积成长 + 自然衰减
+      var mins=5/60; // 5 秒 = 1/12 分钟
+      s.growth+=mins*growthRate();
+      s.hunger=clamp(s.hunger-mins*DECAY.hunger);
+      s.mood=clamp(s.mood-mins*DECAY.mood);
+      s.energy=clamp(s.energy-mins*DECAY.energy);
+      s.clean=clamp(s.clean-mins*DECAY.clean);
+      save();}
+    if(frame%120===0)autoTalk();
+    if(frame%100===0)applyScale(); // 定期更新体型（成长）
+    // 主动天气播报：每约 5 分钟一次（3000 帧 * 100ms），仅在待机时说
+    if(frame%3000===0 && cur==='idle')broadcastWeather(false);
+    var cr=stage().crown;
+    drawMonkey(X,face(),frame,cr);
+    if(document.body.classList.contains('collapsed'))drawCoconutTree(MX,frame);
+  }
+  function init(){catchUp();applyScale();drawMonkey(X,'idle',0,stage().crown);
+    setInterval(tick,100);
+    setTimeout(function(){say('吱！我上桌了~');},600);
+    setTimeout(function(){broadcastWeather(true);},4000); // 启动后主动播一次上海天气
+  }
+  return{feed:feed,play:play,sleep:sleep,wash:wash,poke:poke,init:init,weather:function(){broadcastWeather(true);},stageName:function(){return stage().name;}};
+})();
+window.Game=Game;
+
+// 立即画 + 启动
+drawMonkey(document.getElementById('monkey').getContext('2d'),'idle',0,false);
+Game.init();
+
+// ===== 点击猴子做动作 =====
+document.getElementById('stage').addEventListener('click',function(e){
+  if(justDragged){justDragged=false;return;}
+  Game.poke();
+});
+// 迷你态点击展开
+document.getElementById('mini').addEventListener('click',function(){expand();});
+
+// ===== 收起/展开 =====
+function collapse(){
+  document.body.classList.add('collapsed');
+  if(window.petAPI&&window.petAPI.resize)window.petAPI.resize(64,64,'edge');
+}
+function expand(){
+  document.body.classList.remove('collapsed');
+  if(window.petAPI&&window.petAPI.resize)window.petAPI.resize(0,0,'restore');
+}
+document.getElementById('btn-collapse').addEventListener('click',function(e){e.stopPropagation();collapse();});
+
+// ===== 拖动 =====
+var stage=document.getElementById('stage');
+var dragging=false,justDragged=false,lastX=0,lastY=0,moved=0;
+stage.addEventListener('mousedown',function(e){dragging=true;moved=0;lastX=e.screenX;lastY=e.screenY;});
+document.getElementById('mini').addEventListener('mousedown',function(e){dragging=true;moved=0;lastX=e.screenX;lastY=e.screenY;});
+window.addEventListener('mousemove',function(e){
+  if(dragging){var dx=e.screenX-lastX,dy=e.screenY-lastY;lastX=e.screenX;lastY=e.screenY;moved+=Math.abs(dx)+Math.abs(dy);
+    if(window.petAPI&&window.petAPI.dragWindow)window.petAPI.dragWindow(dx,dy);}
+});
+window.addEventListener('mouseup',function(){if(dragging&&moved>4)justDragged=true;dragging=false;});
+}catch(e){showErr('FATAL '+(e&&e.message||e));}
+</script>
+</body></html>

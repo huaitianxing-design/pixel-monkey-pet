@@ -1,0 +1,36 @@
+{
+  "name": "pixel-monkey-desktop",
+  "version": "1.0.0",
+  "description": "像素猴子 · Mac 桌面宠物挂件",
+  "main": "main.js",
+  "author": "e-commercial",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac --arm64"
+  },
+  "build": {
+    "appId": "com.ecommercial.pixelmonkey",
+    "productName": "PixelMonkey",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*"
+    ],
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["arm64"] },
+        { "target": "dir", "arch": ["arm64"] }
+      ],
+      "category": "public.app-category.entertainment",
+      "icon": "src/icon.png"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  }
+}
